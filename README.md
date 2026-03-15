@@ -1,5 +1,10 @@
 # Klimatronik Home Assistant Integration
 
+[![HACS](https://img.shields.io/badge/HACS-Custom%20Integration-41BDF5.svg)](https://hacs.xyz/)
+[![Release](https://img.shields.io/github/v/release/skcc321/ha-klimatronik)](https://github.com/skcc321/ha-klimatronik/releases)
+[![Tests](https://github.com/skcc321/ha-klimatronik/actions/workflows/tests.yml/badge.svg)](https://github.com/skcc321/ha-klimatronik/actions/workflows/tests.yml)
+[![License](https://img.shields.io/github/license/skcc321/ha-klimatronik)](https://github.com/skcc321/ha-klimatronik/blob/main/LICENSE)
+
 Local Home Assistant custom integration for Klimatronik ventilation devices.
 
 Tested on: Klimatronik 160 PRO series.
