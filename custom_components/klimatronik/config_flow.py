@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Mapping
 import concurrent.futures
-from ipaddress import ip_network
 import re
+import select
 import socket
 import struct
 import subprocess
@@ -51,6 +50,15 @@ ESPRESSIF_OUI_PREFIXES = {
     "c8:2e:18",
     "cc:db:a7",
 }
+DISCOVERY_PORT = 8080
+DISCOVERY_MAX_WORKERS = 64
+DISCOVERY_CONNECT_TIMEOUT = 0.25
+DISCOVERY_PROBE_TIMEOUT = 1.0
+DISCOVERY_HOST_ATTEMPTS = 2
+DISCOVERY_READ_WAIT_SLICE = 0.15
+DISCOVERY_ACK_TOKEN = b"ccmdiAuthorizecerrceok"
+DISCOVERY_AUTH_PAYLOAD = b"ccmdiAuthorizecpin" + bytes([0x1A, 0xFF, 0xFF, 0x00, 0x00])
+DISCOVERY_AUTH_FRAME = struct.pack(">HB", len(DISCOVERY_AUTH_PAYLOAD) + 1, 0xA2) + DISCOVERY_AUTH_PAYLOAD
 
 
 def _base_schema(defaults: Mapping[str, Any] | None = None) -> vol.Schema:
@@ -252,7 +260,7 @@ class KlimatronikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 seen.add(prefix)
                 prefixes.append(prefix)
 
-        # Collect all global IPv4 addresses from interfaces (works better with VPN/bridges).
+        # Linux: collect all global IPv4 addresses from interfaces.
         try:
             out = subprocess.check_output(
                 ["ip", "-4", "-o", "addr", "show", "scope", "global"],
@@ -266,7 +274,34 @@ class KlimatronikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         except (OSError, subprocess.CalledProcessError):
             pass
 
-        # Fallback to route-selected source IP.
+        # macOS: derive default interface and read its IPv4 address.
+        try:
+            route_out = subprocess.check_output(
+                ["route", "-n", "get", "default"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+            iface = ""
+            for line in route_out.splitlines():
+                match = re.match(r"^\s*interface:\s+(\S+)\s*$", line)
+                if match:
+                    iface = match.group(1)
+                    break
+            iface_candidates = [iface, "en0", "en1", "en2", "bridge0", "bridge100"]
+            for candidate in iface_candidates:
+                if not candidate:
+                    continue
+                ip = subprocess.check_output(
+                    ["ipconfig", "getifaddr", candidate],
+                    text=True,
+                    stderr=subprocess.DEVNULL,
+                ).strip()
+                if ip:
+                    add_ip(ip)
+        except (OSError, subprocess.CalledProcessError):
+            pass
+
+        # Cross-platform fallback: route-selected source IP.
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
                 sock.connect(("8.8.8.8", 80))
@@ -287,14 +322,14 @@ class KlimatronikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if len(parts) == 4:
                     entry_prefixes.append(".".join(parts[:3]))
 
-        # If we already know Klimatronik devices, scan only their subnets first.
-        prefixes = entry_prefixes if entry_prefixes else detected_prefixes
+        # Scan already configured subnets first, then local interface subnets.
+        prefixes = [*entry_prefixes, *detected_prefixes]
 
         out: list[str] = []
         seen: set[str] = set()
         for prefix in prefixes:
-            # Skip docker/private bridge-style ranges; they create long false scans.
-            if ip_network(f"{prefix}.0/24", strict=False).subnet_of(ip_network("172.16.0.0/12")):
+            # Skip obvious non-LAN local ranges.
+            if prefix.startswith("127.") or prefix.startswith("169.254."):
                 continue
             if prefix not in seen:
                 seen.add(prefix)
@@ -310,96 +345,116 @@ class KlimatronikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     def _discover_hosts_blocking(self, subnet_prefix: str, limit: int) -> list[str]:
         preferred_hosts = self._preferred_hosts_for_subnet(subnet_prefix)
-        found: list[str] = []
+        confirmed: set[str] = set()
 
         # First pass: probe likely devices (ARP/neigh Espressif hints) with minimal fanout.
         for ip in preferred_hosts:
             if self._probe_host_blocking(ip):
-                found.append(ip)
+                confirmed.add(ip)
 
-        if limit > 0 and len(found) >= limit:
-            return sorted(found[:limit])
+        if limit > 0 and len(confirmed) >= limit:
+            return sorted(confirmed)[:limit]
 
-        # Second pass: scan the whole /24 but avoid refiring already probed preferred hosts.
-        hosts = [f"{subnet_prefix}.{host}" for host in range(1, 255) if f"{subnet_prefix}.{host}" not in set(preferred_hosts)]
-        found: list[str] = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        # Second pass: scan the whole /24, skipping hosts already confirmed.
+        hosts = [
+            f"{subnet_prefix}.{host}"
+            for host in range(1, 255)
+            if f"{subnet_prefix}.{host}" not in confirmed
+        ]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=DISCOVERY_MAX_WORKERS) as pool:
             futures = {pool.submit(self._probe_host_blocking, ip): ip for ip in hosts}
             for fut in concurrent.futures.as_completed(futures):
                 ip = futures[fut]
                 try:
                     if fut.result():
-                        found.append(ip)
+                        confirmed.add(ip)
+                        if limit > 0 and len(confirmed) >= limit:
+                            break
                 except Exception:
                     continue
-        found = sorted(set(found + preferred_hosts))
-        if limit > 0:
-            return found[:limit]
-        return found
+        discovered = sorted(confirmed)
+        return discovered[:limit] if limit > 0 else discovered
 
     def _preferred_hosts_for_subnet(self, subnet_prefix: str) -> list[str]:
         hosts: list[str] = []
+        seen: set[str] = set()
+
+        def add_if_likely(ip: str, mac: str) -> None:
+            mac_prefix = ":".join(mac.lower().split(":")[:3]) if mac else ""
+            if mac_prefix not in ESPRESSIF_OUI_PREFIXES:
+                return
+            if ip in seen:
+                return
+            seen.add(ip)
+            hosts.append(ip)
+
         try:
-            out = subprocess.check_output(
+            neigh_out = subprocess.check_output(
                 ["ip", "neigh", "show"],
                 text=True,
                 stderr=subprocess.DEVNULL,
             )
         except (OSError, subprocess.CalledProcessError):
-            return hosts
+            neigh_out = ""
 
-        seen: set[str] = set()
-        for line in out.splitlines():
+        for line in neigh_out.splitlines():
             ip_match = re.search(r"\b(\d+\.\d+\.\d+\.\d+)\b", line)
-            if not ip_match:
+            mac_match = re.search(r"\blladdr\s+([0-9a-f:]{17})\b", line.lower())
+            if not ip_match or not mac_match:
                 continue
             ip = ip_match.group(1)
-            if not ip.startswith(f"{subnet_prefix}."):
+            if ip.startswith(f"{subnet_prefix}."):
+                add_if_likely(ip, mac_match.group(1))
+
+        try:
+            arp_out = subprocess.check_output(
+                ["arp", "-an"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.CalledProcessError):
+            arp_out = ""
+
+        for line in arp_out.splitlines():
+            ip_match = re.search(r"\((\d+\.\d+\.\d+\.\d+)\)", line)
+            mac_match = re.search(r"\bat\s+([0-9a-fA-F:]{17}|[0-9a-fA-F-]{17})\b", line)
+            if not ip_match or not mac_match:
                 continue
-
-            line_lower = line.lower()
-            mac_match = re.search(r"\blladdr\s+([0-9a-f:]{17})\b", line_lower)
-            mac = mac_match.group(1) if mac_match else ""
-            mac_prefix = ":".join(mac.split(":")[:3]) if mac else ""
-
-            likely = "espressif" in line_lower or mac_prefix in ESPRESSIF_OUI_PREFIXES
-            if likely and ip not in seen:
-                seen.add(ip)
-                hosts.append(ip)
+            ip = ip_match.group(1)
+            if ip.startswith(f"{subnet_prefix}."):
+                add_if_likely(ip, mac_match.group(1).replace("-", ":"))
 
         return hosts
 
     def _probe_host_blocking(self, ip: str) -> bool:
-        for _attempt in range(2):
+        for _attempt in range(DISCOVERY_HOST_ATTEMPTS):
             sock: socket.socket | None = None
             try:
-                sock = socket.create_connection((ip, 8080), timeout=1.0)
+                sock = socket.create_connection((ip, DISCOVERY_PORT), timeout=DISCOVERY_CONNECT_TIMEOUT)
                 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                payload = b"ccmdiAuthorizecpin" + bytes([0x1A, 0xFF, 0xFF, 0x00, 0x00])
-                frame = struct.pack(">HB", len(payload) + 1, 0xA2) + payload
-                sock.sendall(frame)
-
-                ack_token = b"ccmdiAuthorizecerrceok"
-                sock.setblocking(False)
+                sock.sendall(DISCOVERY_AUTH_FRAME)
                 raw = b""
-                deadline = time.time() + 2.0
-                while time.time() < deadline:
-                    try:
-                        chunk = sock.recv(8192)
-                    except BlockingIOError:
-                        time.sleep(0.03)
+                deadline = time.monotonic() + DISCOVERY_PROBE_TIMEOUT
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    wait = min(remaining, DISCOVERY_READ_WAIT_SLICE)
+                    readable, _, _ = select.select([sock], [], [], wait)
+                    if not readable:
                         continue
+                    chunk = sock.recv(8192)
                     if not chunk:
                         break
                     raw += chunk
-                    if ack_token in raw:
+                    if DISCOVERY_ACK_TOKEN in raw:
                         return True
             except OSError:
                 pass
             finally:
                 if sock is not None:
                     sock.close()
-            time.sleep(0.05)
+            time.sleep(0.03)
         return False
 
     @staticmethod
