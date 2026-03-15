@@ -40,9 +40,6 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Run unit tests
-        run: python -m unittest discover -s tests -v
-
       - name: Check if tag already exists
         id: tag_check
         run: |
@@ -56,6 +53,10 @@ jobs:
       - name: Skip duplicate release
         if: steps.tag_check.outputs.exists == 'true'
         run: echo "Tag ${{ steps.version.outputs.tag }} already exists. Nothing to release."
+
+      - name: Run unit tests
+        if: steps.tag_check.outputs.exists == 'false'
+        run: python -m unittest discover -s tests -v
 
       - name: Create and push release tag
         if: steps.tag_check.outputs.exists == 'false'
