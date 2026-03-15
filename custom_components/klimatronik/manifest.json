@@ -2,13 +2,13 @@
   "domain": "klimatronik",
   "name": "Klimatronik",
   "version": "0.1.0",
-  "documentation": "https://github.com/viktorsych/ha-klimatronik",
-  "issue_tracker": "https://github.com/viktorsych/ha-klimatronik/issues",
+  "documentation": "https://github.com/skcc321/ha-klimatronik",
+  "issue_tracker": "https://github.com/skcc321/ha-klimatronik/issues",
   "integration_type": "device",
   "config_flow": true,
   "iot_class": "local_polling",
   "requirements": [],
   "codeowners": [
-    "@viktorsych"
+    "@skcc321"
   ]
 }
