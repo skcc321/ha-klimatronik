@@ -47,10 +47,10 @@ This repository contains the standalone integration code in:
 
 ## Releases
 
-- Repository maintainers can run the `Release` workflow from GitHub `Actions`.
-- Provide a semantic version like `0.1.1`.
-- The workflow updates `manifest.json`, creates the release commit and tag, and
-  publishes the GitHub release used by HACS.
+- Bump `custom_components/klimatronik/manifest.json` `version` in a PR.
+- After that PR is merged into `main`, the `Release` workflow runs automatically.
+- The workflow validates tests, creates tag `v<manifest_version>` (if missing),
+  and publishes the GitHub release used by HACS.
 
 ## License
 
