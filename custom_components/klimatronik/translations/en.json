@@ -1,0 +1,101 @@
+{
+  "title": "Klimatronik",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Klimatronik",
+        "menu_options": {
+          "manual": "Manual",
+          "discover": "Discover on local network"
+        }
+      },
+      "manual": {
+        "title": "Manual setup",
+        "data": {
+          "host": "Host",
+          "name": "Name",
+          "default_intensity": "Auto: Default intensity",
+          "manual_inflow": "Manual: Inflow",
+          "manual_outflow": "Manual: Outflow",
+          "turbo_duration": "Turbo: Duration (seconds)",
+          "turbo_rpm": "Turbo: RPM",
+          "quiet_weekday_start": "Quiet: Weekday start (HH:MM)",
+          "quiet_weekday_end": "Quiet: Weekday end (HH:MM)",
+          "quiet_weekend_start": "Quiet: Weekend start (HH:MM)",
+          "quiet_weekend_end": "Quiet: Weekend end (HH:MM)"
+        }
+      },
+      "discover": {
+        "title": "Discover devices",
+        "description": "Scanning local subnets: {subnets}"
+      },
+      "pick_discovered": {
+        "title": "Select discovered device",
+        "data": {
+          "host": "Discovered host",
+          "name": "Name",
+          "default_intensity": "Auto: Default intensity",
+          "manual_inflow": "Manual: Inflow",
+          "manual_outflow": "Manual: Outflow",
+          "turbo_duration": "Turbo: Duration (seconds)",
+          "turbo_rpm": "Turbo: RPM",
+          "quiet_weekday_start": "Quiet: Weekday start (HH:MM)",
+          "quiet_weekday_end": "Quiet: Weekday end (HH:MM)",
+          "quiet_weekend_start": "Quiet: Weekend start (HH:MM)",
+          "quiet_weekend_end": "Quiet: Weekend end (HH:MM)"
+        }
+      }
+    },
+    "error": {
+      "invalid_host": "Invalid host",
+      "invalid_time": "Invalid time format, expected HH:MM",
+      "no_devices_found": "No Klimatronik devices found on your local subnet",
+      "cannot_detect_subnet": "Cannot detect local subnet on this host"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Host and name",
+        "description": "Configure device identity and connection target.",
+        "data": {
+          "host": "Host",
+          "name": "Name"
+        }
+      },
+      "auto": {
+        "title": "Auto mode",
+        "description": "Configure defaults used when the device is in auto mode.",
+        "data": {
+          "default_intensity": "Default intensity"
+        }
+      },
+      "turbo": {
+        "title": "Turbo mode",
+        "description": "Configure turbo duration and RPM.",
+        "data": {
+          "turbo_duration": "Duration (seconds)",
+          "turbo_rpm": "RPM"
+        }
+      },
+      "manual": {
+        "title": "Manual mode",
+        "description": "Configure manual inflow and outflow values.",
+        "data": {
+          "manual_inflow": "Inflow",
+          "manual_outflow": "Outflow"
+        }
+      },
+      "quiet": {
+        "title": "Quiet mode",
+        "description": "Configure weekday and weekend quiet schedules.",
+        "data": {
+          "quiet_weekday_start": "Weekday start (HH:MM)",
+          "quiet_weekday_end": "Weekday end (HH:MM)",
+          "quiet_weekend_start": "Weekend start (HH:MM)",
+          "quiet_weekend_end": "Weekend end (HH:MM)"
+        }
+      }
+    }
+  }
+}
