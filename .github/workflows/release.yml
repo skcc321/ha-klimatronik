@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish, for example 0.1.1"
+        required: true
+        type: string
+      release_notes:
+        description: "Optional release notes body"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate version input
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Version must match X.Y.Z"
+            exit 1
+          fi
+
+      - name: Update integration version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          manifest_path = Path("custom_components/klimatronik/manifest.json")
+          manifest = json.loads(manifest_path.read_text())
+          manifest["version"] = version
+          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+          PY
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Commit release version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/klimatronik/manifest.json
+          if git diff --cached --quiet; then
+            echo "Version is already set to $VERSION"
+            exit 1
+          fi
+          git commit -m "Release v$VERSION"
+
+      - name: Create release tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: git tag "v$VERSION"
+
+      - name: Push release commit and tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git push origin HEAD:main
+          git push origin "v$VERSION"
+
+      - name: Publish GitHub release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          if [ -n "$RELEASE_NOTES" ]; then
+            gh release create "v$VERSION" --title "v$VERSION" --notes "$RELEASE_NOTES"
+          else
+            gh release create "v$VERSION" --title "v$VERSION" --generate-notes
+          fi
