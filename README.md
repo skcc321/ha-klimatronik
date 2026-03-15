@@ -43,13 +43,14 @@ This repository contains the standalone integration code in:
 ## Development
 
 - Run Home Assistant `check_config` before release.
-- Keep `manifest.json` version aligned with release tags.
 - Use semantic versioning.
 
 ## Releases
 
-- Create Git tag like `v0.1.1`.
-- Publish GitHub release notes for user-facing changes.
+- Repository maintainers can run the `Release` workflow from GitHub `Actions`.
+- Provide a semantic version like `0.1.1`.
+- The workflow updates `manifest.json`, creates the release commit and tag, and
+  publishes the GitHub release used by HACS.
 
 ## License
 
