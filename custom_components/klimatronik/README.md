@@ -17,15 +17,12 @@ This integration talks to Klimatronik devices directly over local TCP (`<device_
   - inflow fan RPM
   - outflow fan RPM
 
-## Install
+## Scope
 
-Copy this folder to Home Assistant:
+This README focuses on protocol behavior, runtime notes, and maintenance details
+for the integration implementation.
 
-`<ha_config>/custom_components/klimatronik`
-
-Then restart Home Assistant and add integration:
-
-`Settings -> Devices & Services -> Add Integration -> Klimatronik`
+For installation and end-user setup, use the repository root README.
 
 ## Current Runtime Model
 
