@@ -18,6 +18,13 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOT = ROOT / "custom_components" / "klimatronik"
 
 
+def _module_available(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return name in sys.modules
+
+
 def _ensure_package(name: str, path: Path | None = None) -> None:
     module = sys.modules.get(name)
     if module is None:
@@ -28,7 +35,7 @@ def _ensure_package(name: str, path: Path | None = None) -> None:
 
 
 def _install_homeassistant_stubs() -> None:
-    if "homeassistant" in sys.modules:
+    if _module_available("homeassistant"):
         return
 
     homeassistant = types.ModuleType("homeassistant")
@@ -141,7 +148,7 @@ def _install_homeassistant_stubs() -> None:
 
 
 def _install_voluptuous_stub() -> None:
-    if "voluptuous" in sys.modules:
+    if _module_available("voluptuous"):
         return
 
     voluptuous = types.ModuleType("voluptuous")
