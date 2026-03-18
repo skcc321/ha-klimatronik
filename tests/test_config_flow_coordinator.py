@@ -140,6 +140,64 @@ def _install_homeassistant_stubs() -> None:
     sys.modules["homeassistant.helpers.update_coordinator"] = update_coordinator_module
 
 
+def _install_voluptuous_stub() -> None:
+    if "voluptuous" in sys.modules:
+        return
+
+    voluptuous = types.ModuleType("voluptuous")
+
+    class _Marker:
+        def __init__(self, key, default=None):
+            self.key = key
+            self.default = default
+
+        def __hash__(self) -> int:
+            return hash((type(self), self.key, self.default))
+
+        def __eq__(self, other: object) -> bool:
+            return (
+                isinstance(other, type(self))
+                and self.key == other.key
+                and self.default == other.default
+            )
+
+    class Required(_Marker):
+        pass
+
+    class Optional(_Marker):
+        pass
+
+    class In:
+        def __init__(self, options):
+            self.options = tuple(options)
+
+    class Coerce:
+        def __init__(self, target_type):
+            self.target_type = target_type
+
+    class Range:
+        def __init__(self, *, min=None, max=None):
+            self.min = min
+            self.max = max
+
+    class All:
+        def __init__(self, *validators):
+            self.validators = validators
+
+    class Schema:
+        def __init__(self, schema):
+            self.schema = schema
+
+    voluptuous.Required = Required
+    voluptuous.Optional = Optional
+    voluptuous.In = In
+    voluptuous.Coerce = Coerce
+    voluptuous.Range = Range
+    voluptuous.All = All
+    voluptuous.Schema = Schema
+    sys.modules["voluptuous"] = voluptuous
+
+
 def _load_module(module_name: str, file_name: str):
     spec = importlib.util.spec_from_file_location(module_name, PACKAGE_ROOT / file_name)
     assert spec is not None and spec.loader is not None
@@ -152,6 +210,7 @@ def _load_module(module_name: str, file_name: str):
 _ensure_package("custom_components", ROOT / "custom_components")
 _ensure_package("custom_components.klimatronik", PACKAGE_ROOT)
 _install_homeassistant_stubs()
+_install_voluptuous_stub()
 
 CONST_MODULE = _load_module("custom_components.klimatronik.const", "const.py")
 API_MODULE = _load_module("custom_components.klimatronik.api", "api.py")
