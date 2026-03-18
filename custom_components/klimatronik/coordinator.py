@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import re
 import time
 from datetime import timedelta
 import asyncio
@@ -19,6 +18,7 @@ from .api import (
     KlimatronikConnectionError,
     KlimatronikError,
     KlimatronikTimeoutError,
+    is_valid_hhmm,
 )
 from .const import (
     CONF_DEFAULT_INTENSITY,
@@ -28,21 +28,14 @@ from .const import (
     CONF_QUIET_WEEKDAY_START,
     CONF_QUIET_WEEKEND_END,
     CONF_QUIET_WEEKEND_START,
-    CONF_SCAN_INTERVAL,
     CONF_TURBO_DURATION,
     CONF_TURBO_RPM,
-    DEFAULT_INTENSITY,
-    DEFAULT_MANUAL_INFLOW,
-    DEFAULT_MANUAL_OUTFLOW,
-    DEFAULT_QUIET_WEEKDAY_END,
-    DEFAULT_QUIET_WEEKDAY_START,
-    DEFAULT_QUIET_WEEKEND_END,
-    DEFAULT_QUIET_WEEKEND_START,
     DEFAULT_READY_WAIT,
     DEFAULT_SCAN_INTERVAL,
-    DEFAULT_TURBO_DURATION,
-    DEFAULT_TURBO_RPM,
     DOMAIN,
+    ENTRY_OPTION_DEFAULTS,
+    MODES,
+    QUIET_TIME_OPTION_KEYS,
 )
 
 _POLL_LOCK = asyncio.Lock()
@@ -87,31 +80,15 @@ class KlimatronikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ready_wait=DEFAULT_READY_WAIT,
         )
 
-        self.default_intensity = int(
-            entry.options.get(CONF_DEFAULT_INTENSITY, entry.data.get(CONF_DEFAULT_INTENSITY, DEFAULT_INTENSITY))
-        )
-        self.manual_inflow = int(
-            entry.options.get(CONF_MANUAL_INFLOW, entry.data.get(CONF_MANUAL_INFLOW, DEFAULT_MANUAL_INFLOW))
-        )
-        self.manual_outflow = int(
-            entry.options.get(CONF_MANUAL_OUTFLOW, entry.data.get(CONF_MANUAL_OUTFLOW, DEFAULT_MANUAL_OUTFLOW))
-        )
-        self.turbo_duration = int(
-            entry.options.get(CONF_TURBO_DURATION, entry.data.get(CONF_TURBO_DURATION, DEFAULT_TURBO_DURATION))
-        )
-        self.turbo_rpm = int(entry.options.get(CONF_TURBO_RPM, entry.data.get(CONF_TURBO_RPM, DEFAULT_TURBO_RPM)))
-        self.quiet_weekday_start = str(
-            entry.options.get(CONF_QUIET_WEEKDAY_START, entry.data.get(CONF_QUIET_WEEKDAY_START, DEFAULT_QUIET_WEEKDAY_START))
-        )
-        self.quiet_weekday_end = str(
-            entry.options.get(CONF_QUIET_WEEKDAY_END, entry.data.get(CONF_QUIET_WEEKDAY_END, DEFAULT_QUIET_WEEKDAY_END))
-        )
-        self.quiet_weekend_start = str(
-            entry.options.get(CONF_QUIET_WEEKEND_START, entry.data.get(CONF_QUIET_WEEKEND_START, DEFAULT_QUIET_WEEKEND_START))
-        )
-        self.quiet_weekend_end = str(
-            entry.options.get(CONF_QUIET_WEEKEND_END, entry.data.get(CONF_QUIET_WEEKEND_END, DEFAULT_QUIET_WEEKEND_END))
-        )
+        self.default_intensity = int(self._entry_option(CONF_DEFAULT_INTENSITY))
+        self.manual_inflow = int(self._entry_option(CONF_MANUAL_INFLOW))
+        self.manual_outflow = int(self._entry_option(CONF_MANUAL_OUTFLOW))
+        self.turbo_duration = int(self._entry_option(CONF_TURBO_DURATION))
+        self.turbo_rpm = int(self._entry_option(CONF_TURBO_RPM))
+        self.quiet_weekday_start = str(self._entry_option(CONF_QUIET_WEEKDAY_START))
+        self.quiet_weekday_end = str(self._entry_option(CONF_QUIET_WEEKDAY_END))
+        self.quiet_weekend_start = str(self._entry_option(CONF_QUIET_WEEKEND_START))
+        self.quiet_weekend_end = str(self._entry_option(CONF_QUIET_WEEKEND_END))
         self._last_intensity = self.default_intensity
         self._last_mode = "off"
         self._sticky_decoded: dict[str, Any] = {}
@@ -126,6 +103,11 @@ class KlimatronikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def display_name(self) -> str:
         return self._name
 
+    def _entry_option(self, key: str) -> int | str:
+        return self._entry.options.get(
+            key, self._entry.data.get(key, ENTRY_OPTION_DEFAULTS[key])
+        )
+
     async def _async_update_data(self) -> dict[str, Any]:
         # When the background session is healthy, the coordinator's scheduled
         # refresh should return cached stream data instead of opening another
@@ -136,7 +118,11 @@ class KlimatronikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         try:
             sample = await self._poll_state()
-        except (KlimatronikConnectionError, KlimatronikTimeoutError, KlimatronikError) as err:
+        except (
+            KlimatronikConnectionError,
+            KlimatronikTimeoutError,
+            KlimatronikError,
+        ) as err:
             self._consecutive_failures += 1
             if self.data and self._consecutive_failures < _FAILURES_UNTIL_UNAVAILABLE:
                 return {**self.data, "available": True}
@@ -207,12 +193,17 @@ class KlimatronikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             weekend_end=self.quiet_weekend_end,
         )
 
-    async def async_set_mode(self, mode: str) -> None:
+    async def async_set_mode(self, mode: str, *, intensity: int | None = None) -> None:
+        if mode not in MODES:
+            raise UpdateFailed(f"Unsupported mode: {mode}")
+
         if mode == "off":
             await self.async_set_off()
             return
         if mode == "auto":
-            await self.async_set_auto(self.default_intensity)
+            await self.async_set_auto(
+                self.default_intensity if intensity is None else intensity
+            )
             return
         if mode == "manual":
             await self.async_set_manual()
@@ -234,14 +225,9 @@ class KlimatronikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             CONF_TURBO_RPM,
         }:
             checked_value = int(value)
-        elif key in {
-            CONF_QUIET_WEEKDAY_START,
-            CONF_QUIET_WEEKDAY_END,
-            CONF_QUIET_WEEKEND_START,
-            CONF_QUIET_WEEKEND_END,
-        }:
+        elif key in QUIET_TIME_OPTION_KEYS:
             checked_value = str(value).strip()
-            if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", checked_value):
+            if not is_valid_hhmm(checked_value):
                 raise UpdateFailed(f"Invalid HH:MM value for {key}: {checked_value}")
         else:
             raise UpdateFailed(f"Unsupported setting key: {key}")
@@ -259,7 +245,11 @@ class KlimatronikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         async def _do_command_and_refresh():
             try:
                 result = await func(**kwargs)
-            except (KlimatronikConnectionError, KlimatronikTimeoutError, KlimatronikError) as err:
+            except (
+                KlimatronikConnectionError,
+                KlimatronikTimeoutError,
+                KlimatronikError,
+            ) as err:
                 raise UpdateFailed(str(err)) from err
 
             if not result.get("acknowledged", False):
@@ -308,7 +298,9 @@ class KlimatronikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _stream_is_fresh(self) -> bool:
         if not self.data:
             return False
-        return (time.monotonic() - self._stream_last_sample_monotonic) <= _STREAM_FRESHNESS_SECONDS
+        return (
+            time.monotonic() - self._stream_last_sample_monotonic
+        ) <= _STREAM_FRESHNESS_SECONDS
 
     def _ensure_stream_locked(self) -> None:
         if not self._stream_desired:
@@ -334,9 +326,13 @@ class KlimatronikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 async with self.client.open_read_stream() as (reader, _writer):
                     _DEVICE_LAST_OP_TS[self._host] = time.monotonic()
                     while self._stream_desired:
-                        sample = await self.client.next_notify(reader, timeout=_STREAM_NOTIFY_TIMEOUT)
+                        sample = await self.client.next_notify(
+                            reader, timeout=_STREAM_NOTIFY_TIMEOUT
+                        )
                         if sample is None:
-                            raise KlimatronikTimeoutError(f"No notify readings from {self._host}:8080")
+                            raise KlimatronikTimeoutError(
+                                f"No notify readings from {self._host}:8080"
+                            )
                         self._consecutive_failures = 0
                         self._stream_last_sample_monotonic = time.monotonic()
                         # Stream updates are pushed straight into the
@@ -345,12 +341,18 @@ class KlimatronikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         self.async_set_updated_data(self._build_state_payload(sample))
             except asyncio.CancelledError:
                 raise
-            except (KlimatronikConnectionError, KlimatronikTimeoutError, KlimatronikError):
+            except (
+                KlimatronikConnectionError,
+                KlimatronikTimeoutError,
+                KlimatronikError,
+            ):
                 if not self._stream_desired:
                     break
                 await asyncio.sleep(_STREAM_RECONNECT_DELAY)
             except Exception:
-                self.logger.exception("Unexpected Klimatronik stream error for %s", self._host)
+                self.logger.exception(
+                    "Unexpected Klimatronik stream error for %s", self._host
+                )
                 if not self._stream_desired:
                     break
                 await asyncio.sleep(_STREAM_RECONNECT_DELAY)
@@ -385,7 +387,9 @@ class KlimatronikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "available": True,
         }
 
-    def _merge_sticky(self, current: dict[str, Any], cache: dict[str, Any]) -> dict[str, Any]:
+    def _merge_sticky(
+        self, current: dict[str, Any], cache: dict[str, Any]
+    ) -> dict[str, Any]:
         merged = dict(current)
         for key, value in current.items():
             if self._value_present(value):
@@ -419,7 +423,9 @@ class KlimatronikCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return "auto"
         return None
 
-    def _extract_intensity(self, decoded: dict[str, Any], raw: dict[str, Any]) -> int | None:
+    def _extract_intensity(
+        self, decoded: dict[str, Any], raw: dict[str, Any]
+    ) -> int | None:
         for source in (decoded, raw):
             value = source.get("iintensity")
             if isinstance(value, str):

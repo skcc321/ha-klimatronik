@@ -18,6 +18,7 @@ from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_NAME
 from homeassistant.core import callback
 
+from .api import is_valid_hhmm
 from .const import (
     CONF_DEFAULT_INTENSITY,
     CONF_MANUAL_INFLOW,
@@ -38,6 +39,7 @@ from .const import (
     DEFAULT_TURBO_DURATION,
     DEFAULT_TURBO_RPM,
     DOMAIN,
+    QUIET_TIME_OPTION_KEYS,
 )
 
 ESPRESSIF_OUI_PREFIXES = {
@@ -58,56 +60,125 @@ DISCOVERY_HOST_ATTEMPTS = 2
 DISCOVERY_READ_WAIT_SLICE = 0.15
 DISCOVERY_ACK_TOKEN = b"ccmdiAuthorizecerrceok"
 DISCOVERY_AUTH_PAYLOAD = b"ccmdiAuthorizecpin" + bytes([0x1A, 0xFF, 0xFF, 0x00, 0x00])
-DISCOVERY_AUTH_FRAME = struct.pack(">HB", len(DISCOVERY_AUTH_PAYLOAD) + 1, 0xA2) + DISCOVERY_AUTH_PAYLOAD
+DISCOVERY_AUTH_FRAME = (
+    struct.pack(">HB", len(DISCOVERY_AUTH_PAYLOAD) + 1, 0xA2) + DISCOVERY_AUTH_PAYLOAD
+)
+
+
+def _int_field(
+    defaults: Mapping[str, Any],
+    key: str,
+    fallback: int,
+    *,
+    min_value: int,
+    max_value: int,
+) -> tuple[Any, Any]:
+    return vol.Optional(key, default=defaults.get(key, fallback)), vol.All(
+        vol.Coerce(int), vol.Range(min=min_value, max=max_value)
+    )
+
+
+def _host_name_fields(defaults: Mapping[str, Any]) -> dict:
+    return {
+        vol.Required(CONF_HOST, default=defaults.get(CONF_HOST, "")): str,
+        vol.Optional(CONF_NAME, default=defaults.get(CONF_NAME, "")): str,
+    }
+
+
+def _performance_fields(defaults: Mapping[str, Any]) -> dict:
+    key, validator = _int_field(
+        defaults, CONF_DEFAULT_INTENSITY, DEFAULT_INTENSITY, min_value=0, max_value=100
+    )
+    return {key: validator}
+
+
+def _manual_fields(defaults: Mapping[str, Any]) -> dict:
+    inflow_key, inflow_validator = _int_field(
+        defaults,
+        CONF_MANUAL_INFLOW,
+        DEFAULT_MANUAL_INFLOW,
+        min_value=1,
+        max_value=10,
+    )
+    outflow_key, outflow_validator = _int_field(
+        defaults,
+        CONF_MANUAL_OUTFLOW,
+        DEFAULT_MANUAL_OUTFLOW,
+        min_value=1,
+        max_value=10,
+    )
+    return {
+        inflow_key: inflow_validator,
+        outflow_key: outflow_validator,
+    }
+
+
+def _turbo_fields(defaults: Mapping[str, Any]) -> dict:
+    duration_key, duration_validator = _int_field(
+        defaults,
+        CONF_TURBO_DURATION,
+        DEFAULT_TURBO_DURATION,
+        min_value=1,
+        max_value=65535,
+    )
+    rpm_key, rpm_validator = _int_field(
+        defaults,
+        CONF_TURBO_RPM,
+        DEFAULT_TURBO_RPM,
+        min_value=1,
+        max_value=65535,
+    )
+    return {
+        duration_key: duration_validator,
+        rpm_key: rpm_validator,
+    }
+
+
+def _quiet_time_fields(defaults: Mapping[str, Any]) -> dict:
+    return {
+        vol.Optional(
+            CONF_QUIET_WEEKDAY_START,
+            default=defaults.get(CONF_QUIET_WEEKDAY_START, DEFAULT_QUIET_WEEKDAY_START),
+        ): str,
+        vol.Optional(
+            CONF_QUIET_WEEKDAY_END,
+            default=defaults.get(CONF_QUIET_WEEKDAY_END, DEFAULT_QUIET_WEEKDAY_END),
+        ): str,
+        vol.Optional(
+            CONF_QUIET_WEEKEND_START,
+            default=defaults.get(CONF_QUIET_WEEKEND_START, DEFAULT_QUIET_WEEKEND_START),
+        ): str,
+        vol.Optional(
+            CONF_QUIET_WEEKEND_END,
+            default=defaults.get(CONF_QUIET_WEEKEND_END, DEFAULT_QUIET_WEEKEND_END),
+        ): str,
+    }
+
+
+def _add_invalid_time_errors(
+    errors: dict[str, str], user_input: Mapping[str, Any]
+) -> None:
+    for key in QUIET_TIME_OPTION_KEYS:
+        if key in user_input and not is_valid_hhmm(user_input[key]):
+            errors[key] = "invalid_time"
 
 
 def _base_schema(defaults: Mapping[str, Any] | None = None) -> vol.Schema:
     data = defaults or {}
     return vol.Schema(
         {
-            vol.Required(CONF_HOST, default=data.get(CONF_HOST, "")): str,
-            vol.Optional(CONF_NAME, default=data.get(CONF_NAME, "")): str,
-            vol.Optional(
-                CONF_DEFAULT_INTENSITY,
-                default=data.get(CONF_DEFAULT_INTENSITY, DEFAULT_INTENSITY),
-            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
-            vol.Optional(
-                CONF_MANUAL_INFLOW,
-                default=data.get(CONF_MANUAL_INFLOW, DEFAULT_MANUAL_INFLOW),
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=10)),
-            vol.Optional(
-                CONF_MANUAL_OUTFLOW,
-                default=data.get(CONF_MANUAL_OUTFLOW, DEFAULT_MANUAL_OUTFLOW),
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=10)),
-            vol.Optional(
-                CONF_TURBO_DURATION,
-                default=data.get(CONF_TURBO_DURATION, DEFAULT_TURBO_DURATION),
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=65535)),
-            vol.Optional(
-                CONF_TURBO_RPM,
-                default=data.get(CONF_TURBO_RPM, DEFAULT_TURBO_RPM),
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=65535)),
-            vol.Optional(
-                CONF_QUIET_WEEKDAY_START,
-                default=data.get(CONF_QUIET_WEEKDAY_START, DEFAULT_QUIET_WEEKDAY_START),
-            ): str,
-            vol.Optional(
-                CONF_QUIET_WEEKDAY_END,
-                default=data.get(CONF_QUIET_WEEKDAY_END, DEFAULT_QUIET_WEEKDAY_END),
-            ): str,
-            vol.Optional(
-                CONF_QUIET_WEEKEND_START,
-                default=data.get(CONF_QUIET_WEEKEND_START, DEFAULT_QUIET_WEEKEND_START),
-            ): str,
-            vol.Optional(
-                CONF_QUIET_WEEKEND_END,
-                default=data.get(CONF_QUIET_WEEKEND_END, DEFAULT_QUIET_WEEKEND_END),
-            ): str,
+            **_host_name_fields(data),
+            **_performance_fields(data),
+            **_manual_fields(data),
+            **_turbo_fields(data),
+            **_quiet_time_fields(data),
         }
     )
 
 
-def _discovered_device_schema(hosts: list[str], defaults: Mapping[str, Any] | None = None) -> vol.Schema:
+def _discovered_device_schema(
+    hosts: list[str], defaults: Mapping[str, Any] | None = None
+) -> vol.Schema:
     data = defaults or {}
     if not hosts:
         hosts = [""]
@@ -116,48 +187,12 @@ def _discovered_device_schema(hosts: list[str], defaults: Mapping[str, Any] | No
         {
             vol.Required(CONF_HOST, default=host_default): vol.In(hosts),
             vol.Optional(CONF_NAME, default=data.get(CONF_NAME, "")): str,
-            vol.Optional(
-                CONF_DEFAULT_INTENSITY,
-                default=data.get(CONF_DEFAULT_INTENSITY, DEFAULT_INTENSITY),
-            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
-            vol.Optional(
-                CONF_MANUAL_INFLOW,
-                default=data.get(CONF_MANUAL_INFLOW, DEFAULT_MANUAL_INFLOW),
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=10)),
-            vol.Optional(
-                CONF_MANUAL_OUTFLOW,
-                default=data.get(CONF_MANUAL_OUTFLOW, DEFAULT_MANUAL_OUTFLOW),
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=10)),
-            vol.Optional(
-                CONF_TURBO_DURATION,
-                default=data.get(CONF_TURBO_DURATION, DEFAULT_TURBO_DURATION),
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=65535)),
-            vol.Optional(
-                CONF_TURBO_RPM,
-                default=data.get(CONF_TURBO_RPM, DEFAULT_TURBO_RPM),
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=65535)),
-            vol.Optional(
-                CONF_QUIET_WEEKDAY_START,
-                default=data.get(CONF_QUIET_WEEKDAY_START, DEFAULT_QUIET_WEEKDAY_START),
-            ): str,
-            vol.Optional(
-                CONF_QUIET_WEEKDAY_END,
-                default=data.get(CONF_QUIET_WEEKDAY_END, DEFAULT_QUIET_WEEKDAY_END),
-            ): str,
-            vol.Optional(
-                CONF_QUIET_WEEKEND_START,
-                default=data.get(CONF_QUIET_WEEKEND_START, DEFAULT_QUIET_WEEKEND_START),
-            ): str,
-            vol.Optional(
-                CONF_QUIET_WEEKEND_END,
-                default=data.get(CONF_QUIET_WEEKEND_END, DEFAULT_QUIET_WEEKEND_END),
-            ): str,
+            **_performance_fields(data),
+            **_manual_fields(data),
+            **_turbo_fields(data),
+            **_quiet_time_fields(data),
         }
     )
-
-
-def _is_valid_hhmm(value: Any) -> bool:
-    return bool(re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", str(value).strip()))
 
 
 class KlimatronikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -177,14 +212,7 @@ class KlimatronikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             host = user_input[CONF_HOST].strip()
-            for key in (
-                CONF_QUIET_WEEKDAY_START,
-                CONF_QUIET_WEEKDAY_END,
-                CONF_QUIET_WEEKEND_START,
-                CONF_QUIET_WEEKEND_END,
-            ):
-                if key in user_input and not _is_valid_hhmm(user_input[key]):
-                    errors[key] = "invalid_time"
+            _add_invalid_time_errors(errors, user_input)
             try:
                 socket.gethostbyname(host)
             except OSError:
@@ -193,9 +221,13 @@ class KlimatronikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(host.lower())
                 self._abort_if_unique_id_configured()
                 title = user_input.get(CONF_NAME, "").strip() or host
-                return self.async_create_entry(title=title, data={**user_input, CONF_HOST: host})
+                return self.async_create_entry(
+                    title=title, data={**user_input, CONF_HOST: host}
+                )
 
-        return self.async_show_form(step_id="manual", data_schema=_base_schema(user_input), errors=errors)
+        return self.async_show_form(
+            step_id="manual", data_schema=_base_schema(user_input), errors=errors
+        )
 
     async def async_step_discover(self, user_input: dict[str, Any] | None = None):
         _ = user_input
@@ -206,7 +238,9 @@ class KlimatronikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         else:
             discovered: list[str] = []
             for subnet in subnets:
-                discovered.extend(await self._async_discover_hosts(subnet_prefix=subnet, limit=0))
+                discovered.extend(
+                    await self._async_discover_hosts(subnet_prefix=subnet, limit=0)
+                )
             self._discovered_hosts = sorted(set(discovered))
             if not self._discovered_hosts:
                 errors["base"] = "no_devices_found"
@@ -216,10 +250,14 @@ class KlimatronikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="discover",
             data_schema=vol.Schema({}),
             errors=errors,
-            description_placeholders={"subnets": ", ".join(subnets) if subnets else "N/A"},
+            description_placeholders={
+                "subnets": ", ".join(subnets) if subnets else "N/A"
+            },
         )
 
-    async def async_step_pick_discovered(self, user_input: dict[str, Any] | None = None):
+    async def async_step_pick_discovered(
+        self, user_input: dict[str, Any] | None = None
+    ):
         if not self._discovered_hosts:
             return await self.async_step_discover()
 
@@ -227,19 +265,14 @@ class KlimatronikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         defaults = user_input or {CONF_HOST: self._discovered_hosts[0]}
         if user_input is not None:
             host = user_input[CONF_HOST].strip()
-            for key in (
-                CONF_QUIET_WEEKDAY_START,
-                CONF_QUIET_WEEKDAY_END,
-                CONF_QUIET_WEEKEND_START,
-                CONF_QUIET_WEEKEND_END,
-            ):
-                if key in user_input and not _is_valid_hhmm(user_input[key]):
-                    errors[key] = "invalid_time"
+            _add_invalid_time_errors(errors, user_input)
             if not errors:
                 await self.async_set_unique_id(host.lower())
                 self._abort_if_unique_id_configured()
                 title = user_input.get(CONF_NAME, "").strip() or host
-                return self.async_create_entry(title=title, data={**user_input, CONF_HOST: host})
+                return self.async_create_entry(
+                    title=title, data={**user_input, CONF_HOST: host}
+                )
 
         return self.async_show_form(
             step_id="pick_discovered",
@@ -336,7 +369,9 @@ class KlimatronikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 out.append(prefix)
         return out
 
-    async def _async_discover_hosts(self, *, subnet_prefix: str, limit: int) -> list[str]:
+    async def _async_discover_hosts(
+        self, *, subnet_prefix: str, limit: int
+    ) -> list[str]:
         return await self.hass.async_add_executor_job(
             self._discover_hosts_blocking,
             subnet_prefix,
@@ -361,7 +396,9 @@ class KlimatronikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             for host in range(1, 255)
             if f"{subnet_prefix}.{host}" not in confirmed
         ]
-        with concurrent.futures.ThreadPoolExecutor(max_workers=DISCOVERY_MAX_WORKERS) as pool:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=DISCOVERY_MAX_WORKERS
+        ) as pool:
             futures = {pool.submit(self._probe_host_blocking, ip): ip for ip in hosts}
             for fut in concurrent.futures.as_completed(futures):
                 ip = futures[fut]
@@ -430,7 +467,9 @@ class KlimatronikConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         for _attempt in range(DISCOVERY_HOST_ATTEMPTS):
             sock: socket.socket | None = None
             try:
-                sock = socket.create_connection((ip, DISCOVERY_PORT), timeout=DISCOVERY_CONNECT_TIMEOUT)
+                sock = socket.create_connection(
+                    (ip, DISCOVERY_PORT), timeout=DISCOVERY_CONNECT_TIMEOUT
+                )
                 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 sock.sendall(DISCOVERY_AUTH_FRAME)
                 raw = b""
@@ -480,40 +519,41 @@ class KlimatronikOptionsFlow(config_entries.OptionsFlow):
             )
             return await self.async_step_auto()
 
-        return self.async_show_form(step_id="init", data_schema=_host_name_schema(self._data))
+        return self.async_show_form(
+            step_id="init", data_schema=_host_name_schema(self._data)
+        )
 
     async def async_step_auto(self, user_input: dict[str, Any] | None = None):
         if user_input is not None:
             self._data.update(user_input)
             return await self.async_step_turbo()
 
-        return self.async_show_form(step_id="auto", data_schema=_auto_schema(self._data))
+        return self.async_show_form(
+            step_id="auto", data_schema=_auto_schema(self._data)
+        )
 
     async def async_step_turbo(self, user_input: dict[str, Any] | None = None):
         if user_input is not None:
             self._data.update(user_input)
             return await self.async_step_manual()
 
-        return self.async_show_form(step_id="turbo", data_schema=_turbo_schema(self._data))
+        return self.async_show_form(
+            step_id="turbo", data_schema=_turbo_schema(self._data)
+        )
 
     async def async_step_manual(self, user_input: dict[str, Any] | None = None):
         if user_input is not None:
             self._data.update(user_input)
             return await self.async_step_quiet()
 
-        return self.async_show_form(step_id="manual", data_schema=_manual_schema(self._data))
+        return self.async_show_form(
+            step_id="manual", data_schema=_manual_schema(self._data)
+        )
 
     async def async_step_quiet(self, user_input: dict[str, Any] | None = None):
         errors: dict[str, str] = {}
         if user_input is not None:
-            for key in (
-                CONF_QUIET_WEEKDAY_START,
-                CONF_QUIET_WEEKDAY_END,
-                CONF_QUIET_WEEKEND_START,
-                CONF_QUIET_WEEKEND_END,
-            ):
-                if key in user_input and not _is_valid_hhmm(user_input[key]):
-                    errors[key] = "invalid_time"
+            _add_invalid_time_errors(errors, user_input)
             if not errors:
                 self._data.update(user_input)
                 self.hass.config_entries.async_update_entry(
@@ -548,77 +588,24 @@ class KlimatronikOptionsFlow(config_entries.OptionsFlow):
 
 def _host_name_schema(defaults: Mapping[str, Any] | None = None) -> vol.Schema:
     data = defaults or {}
-    return vol.Schema(
-        {
-            vol.Required(CONF_HOST, default=data.get(CONF_HOST, "")): str,
-            vol.Optional(CONF_NAME, default=data.get(CONF_NAME, "")): str,
-        }
-    )
+    return vol.Schema(_host_name_fields(data))
 
 
 def _auto_schema(defaults: Mapping[str, Any] | None = None) -> vol.Schema:
     data = defaults or {}
-    return vol.Schema(
-        {
-            vol.Optional(
-                CONF_DEFAULT_INTENSITY,
-                default=data.get(CONF_DEFAULT_INTENSITY, DEFAULT_INTENSITY),
-            ): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
-        }
-    )
+    return vol.Schema(_performance_fields(data))
 
 
 def _turbo_schema(defaults: Mapping[str, Any] | None = None) -> vol.Schema:
     data = defaults or {}
-    return vol.Schema(
-        {
-            vol.Optional(
-                CONF_TURBO_DURATION,
-                default=data.get(CONF_TURBO_DURATION, DEFAULT_TURBO_DURATION),
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=65535)),
-            vol.Optional(
-                CONF_TURBO_RPM,
-                default=data.get(CONF_TURBO_RPM, DEFAULT_TURBO_RPM),
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=65535)),
-        }
-    )
+    return vol.Schema(_turbo_fields(data))
 
 
 def _manual_schema(defaults: Mapping[str, Any] | None = None) -> vol.Schema:
     data = defaults or {}
-    return vol.Schema(
-        {
-            vol.Optional(
-                CONF_MANUAL_INFLOW,
-                default=data.get(CONF_MANUAL_INFLOW, DEFAULT_MANUAL_INFLOW),
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=10)),
-            vol.Optional(
-                CONF_MANUAL_OUTFLOW,
-                default=data.get(CONF_MANUAL_OUTFLOW, DEFAULT_MANUAL_OUTFLOW),
-            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=10)),
-        }
-    )
+    return vol.Schema(_manual_fields(data))
 
 
 def _quiet_schema(defaults: Mapping[str, Any] | None = None) -> vol.Schema:
     data = defaults or {}
-    return vol.Schema(
-        {
-            vol.Optional(
-                CONF_QUIET_WEEKDAY_START,
-                default=data.get(CONF_QUIET_WEEKDAY_START, DEFAULT_QUIET_WEEKDAY_START),
-            ): str,
-            vol.Optional(
-                CONF_QUIET_WEEKDAY_END,
-                default=data.get(CONF_QUIET_WEEKDAY_END, DEFAULT_QUIET_WEEKDAY_END),
-            ): str,
-            vol.Optional(
-                CONF_QUIET_WEEKEND_START,
-                default=data.get(CONF_QUIET_WEEKEND_START, DEFAULT_QUIET_WEEKEND_START),
-            ): str,
-            vol.Optional(
-                CONF_QUIET_WEEKEND_END,
-                default=data.get(CONF_QUIET_WEEKEND_END, DEFAULT_QUIET_WEEKEND_END),
-            ): str,
-        }
-    )
+    return vol.Schema(_quiet_time_fields(data))

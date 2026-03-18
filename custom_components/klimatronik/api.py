@@ -12,6 +12,14 @@ import struct
 from typing import Any
 
 
+HHMM_RE = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+
+
+def is_valid_hhmm(value: Any) -> bool:
+    """Return True when the value is a valid HH:MM string."""
+    return bool(HHMM_RE.fullmatch(str(value).strip()))
+
+
 class KlimatronikError(Exception):
     """Base exception."""
 
@@ -39,7 +47,14 @@ class KlimatronikNotifyParser:
     TAG_F64 = 0xFB
     TAG_NONE = 0x00
     TAG_END = 0xFF
-    TAGS = set(range(TAG_INLINE_MIN, TAG_INLINE_MAX + 1)) | {TAG_U8, TAG_U16, TAG_U32, TAG_F64, TAG_NONE, TAG_END}
+    TAGS = set(range(TAG_INLINE_MIN, TAG_INLINE_MAX + 1)) | {
+        TAG_U8,
+        TAG_U16,
+        TAG_U32,
+        TAG_F64,
+        TAG_NONE,
+        TAG_END,
+    }
     DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
     ZERO_VALUE_KEYS = {"ff1.pwm", "ff1.rpm", "ff2.pwm", "ff2.rpm"}
     NOISY_SUFFIX_KEYS = {
@@ -88,7 +103,9 @@ class KlimatronikNotifyParser:
             raw[key] = value
 
         text = payload.decode("utf-8", errors="replace")
-        mode_hits = re.findall(r"dmode(?:coff|dauto|fmanual|equiet|jauto(?:\.quiet)?|[ie]turbo)", text)
+        mode_hits = re.findall(
+            r"dmode(?:coff|dauto|fmanual|equiet|jauto(?:\.quiet)?|[ie]turbo)", text
+        )
         if mode_hits:
             # Some mixed mode/status blocks contain stale historical mode tokens.
             # The last token observed in the payload tracks the current state best.
@@ -128,7 +145,9 @@ class KlimatronikNotifyParser:
             decoded["temp_outflow_outlet_c"] = temp_jt4
         return decoded
 
-    def _parse_tagged(self, key: str, payload: bytes, tag: int, idx: int) -> tuple[Any, int | None]:
+    def _parse_tagged(
+        self, key: str, payload: bytes, tag: int, idx: int
+    ) -> tuple[Any, int | None]:
         if tag == self.TAG_NONE:
             if key in self.ZERO_VALUE_KEYS:
                 return 0, idx
@@ -172,7 +191,9 @@ class KlimatronikNotifyParser:
             return out
 
         block = mode_block.group(1)
-        mode_hits = re.findall(r"dmode(?:coff|dauto|fmanual|equiet|jauto(?:\.quiet)?|[ie]turbo)", block)
+        mode_hits = re.findall(
+            r"dmode(?:coff|dauto|fmanual|equiet|jauto(?:\.quiet)?|[ie]turbo)", block
+        )
         if mode_hits:
             mode_hint = mode_hits[-1]
         else:
@@ -201,7 +222,9 @@ class KlimatronikNotifyParser:
         )
         if states:
             out["heater_state"] = self._normalize_state_flag(states.group("heater"))
-            out["defroster_state"] = self._normalize_state_flag(states.group("defroster"))
+            out["defroster_state"] = self._normalize_state_flag(
+                states.group("defroster")
+            )
             out["alarm_state"] = self._normalize_state_flag(states.group("alarm"))
             out["servo_state"] = self._normalize_state_flag(states.group("servo"))
         return out
@@ -210,9 +233,17 @@ class KlimatronikNotifyParser:
         cleaned = str(value).strip().lower()
         if cleaned in {"on", "off"}:
             return cleaned
-        if len(cleaned) > 1 and cleaned[0] in {"b", "c", "d"} and cleaned[1:] in {"on", "off"}:
+        if (
+            len(cleaned) > 1
+            and cleaned[0] in {"b", "c", "d"}
+            and cleaned[1:] in {"on", "off"}
+        ):
             return cleaned[1:]
-        if len(cleaned) > 1 and cleaned[-1] in {"b", "c", "d", "e"} and cleaned[:-1] in {"on", "off"}:
+        if (
+            len(cleaned) > 1
+            and cleaned[-1] in {"b", "c", "d", "e"}
+            and cleaned[:-1] in {"on", "off"}
+        ):
             return cleaned[:-1]
         return cleaned
 
@@ -249,7 +280,9 @@ class KlimatronikNotifyParser:
 
         return out
 
-    def _extract_compact_probe_values(self, payload: bytes, raw: dict[str, Any]) -> dict[str, Any]:
+    def _extract_compact_probe_values(
+        self, payload: bytes, raw: dict[str, Any]
+    ) -> dict[str, Any]:
         out: dict[str, Any] = {}
         key = b"jt3.mcp9808"
         if isinstance(raw.get("jt3.mcp9808"), int):
@@ -266,7 +299,9 @@ class KlimatronikNotifyParser:
         if marker in self.TAGS or self._is_key_byte(marker):
             return out
 
-        if marker_idx + 1 >= len(payload) or not self._is_key_byte(payload[marker_idx + 1]):
+        if marker_idx + 1 >= len(payload) or not self._is_key_byte(
+            payload[marker_idx + 1]
+        ):
             return out
 
         out["jt3.mcp9808"] = int(marker)
@@ -365,7 +400,9 @@ class KlimatronikClient:
 
     async def auto(self, *, intensity: int = 32) -> dict[str, Any]:
         checked = self._validate_intensity(intensity)
-        payload = b"ccmdmSetDeviceModedmodedautoiintensity" + self._encode_tagged_uint(checked)
+        payload = b"ccmdmSetDeviceModedmodedautoiintensity" + self._encode_tagged_uint(
+            checked
+        )
         return await self._execute_mode(
             frame_type=self.FRAME_LOC,
             payload=payload,
@@ -431,13 +468,19 @@ class KlimatronikClient:
                 reply += await self._read_available(reader, timeout=timeout)
             return self._ack_result(reply, self.GENERIC_ACK)
 
-    async def state(self, *, samples: int = 3, timeout: float = 12.0) -> KlimatronikStateSample:
+    async def state(
+        self, *, samples: int = 3, timeout: float = 12.0
+    ) -> KlimatronikStateSample:
         readings = await self.readings(samples=samples, timeout=timeout)
         if not readings:
-            raise KlimatronikTimeoutError(f"No notify readings from {self._host}:{self._port}")
+            raise KlimatronikTimeoutError(
+                f"No notify readings from {self._host}:{self._port}"
+            )
         return readings[-1]
 
-    async def readings(self, *, samples: int = 1, timeout: float = 8.0) -> list[KlimatronikStateSample]:
+    async def readings(
+        self, *, samples: int = 1, timeout: float = 8.0
+    ) -> list[KlimatronikStateSample]:
         wanted = int(samples)
         if wanted < 1:
             raise KlimatronikProtocolError("samples must be >= 1")
@@ -450,7 +493,10 @@ class KlimatronikClient:
             while asyncio.get_running_loop().time() < deadline and len(out) < wanted:
                 frame = await self._recv_frame(
                     reader,
-                    timeout=min(self._read_timeout, max(0.01, deadline - asyncio.get_running_loop().time())),
+                    timeout=min(
+                        self._read_timeout,
+                        max(0.01, deadline - asyncio.get_running_loop().time()),
+                    ),
                 )
                 if frame is None:
                     continue
@@ -468,7 +514,9 @@ class KlimatronikClient:
                 )
 
         if not out:
-            raise KlimatronikTimeoutError(f"No notify readings from {self._host}:{self._port}")
+            raise KlimatronikTimeoutError(
+                f"No notify readings from {self._host}:{self._port}"
+            )
         return out
 
     @asynccontextmanager
@@ -477,12 +525,17 @@ class KlimatronikClient:
             await self._prepare_read_session(writer)
             yield reader, writer
 
-    async def next_notify(self, reader: asyncio.StreamReader, *, timeout: float = 12.0) -> KlimatronikStateSample | None:
+    async def next_notify(
+        self, reader: asyncio.StreamReader, *, timeout: float = 12.0
+    ) -> KlimatronikStateSample | None:
         deadline = asyncio.get_running_loop().time() + float(timeout)
         while asyncio.get_running_loop().time() < deadline:
             frame = await self._recv_frame(
                 reader,
-                timeout=min(self._read_timeout, max(0.01, deadline - asyncio.get_running_loop().time())),
+                timeout=min(
+                    self._read_timeout,
+                    max(0.01, deadline - asyncio.get_running_loop().time()),
+                ),
             )
             if frame is None:
                 continue
@@ -497,7 +550,9 @@ class KlimatronikClient:
             )
         return None
 
-    async def _execute_mode(self, *, frame_type: int, payload: bytes, expected_ack: bytes) -> dict[str, Any]:
+    async def _execute_mode(
+        self, *, frame_type: int, payload: bytes, expected_ack: bytes
+    ) -> dict[str, Any]:
         async with self._connect() as (reader, writer):
             await self._prepare_session(reader, writer)
             await self._send_frame(writer, frame_type, payload)
@@ -528,7 +583,9 @@ class KlimatronikClient:
             writer.close()
             await writer.wait_closed()
 
-    async def _prepare_session(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def _prepare_session(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
         await self._authorize(writer)
         await self._read_available(reader, timeout=0.6)
         await self._set_location(writer)
@@ -560,14 +617,18 @@ class KlimatronikClient:
         )
         await self._send_frame(writer, self.FRAME_LOC, payload)
 
-    async def _send_frame(self, writer: asyncio.StreamWriter, frame_type: int, payload: bytes) -> None:
+    async def _send_frame(
+        self, writer: asyncio.StreamWriter, frame_type: int, payload: bytes
+    ) -> None:
         writer.write(self._frame(frame_type, payload))
         try:
             await writer.drain()
         except (OSError, ConnectionError) as err:
             raise KlimatronikConnectionError(f"Send failed: {err}") from err
 
-    async def _recv_exact(self, reader: asyncio.StreamReader, nbytes: int, timeout: float) -> bytes:
+    async def _recv_exact(
+        self, reader: asyncio.StreamReader, nbytes: int, timeout: float
+    ) -> bytes:
         try:
             return await asyncio.wait_for(reader.readexactly(nbytes), timeout=timeout)
         except asyncio.TimeoutError as err:
@@ -575,7 +636,9 @@ class KlimatronikClient:
         except asyncio.IncompleteReadError as err:
             raise KlimatronikConnectionError("Socket closed by device") from err
 
-    async def _recv_frame(self, reader: asyncio.StreamReader, timeout: float) -> dict[str, Any] | None:
+    async def _recv_frame(
+        self, reader: asyncio.StreamReader, timeout: float
+    ) -> dict[str, Any] | None:
         if timeout <= 0:
             return None
         try:
@@ -586,7 +649,9 @@ class KlimatronikClient:
         except KlimatronikTimeoutError:
             return None
 
-    async def _read_available(self, reader: asyncio.StreamReader, *, timeout: float) -> bytes:
+    async def _read_available(
+        self, reader: asyncio.StreamReader, *, timeout: float
+    ) -> bytes:
         if timeout <= 0:
             return b""
 
@@ -594,7 +659,9 @@ class KlimatronikClient:
         out = bytearray()
         while (left := end - asyncio.get_running_loop().time()) > 0:
             try:
-                chunk = await asyncio.wait_for(reader.read(8192), timeout=min(left, 0.15))
+                chunk = await asyncio.wait_for(
+                    reader.read(8192), timeout=min(left, 0.15)
+                )
             except asyncio.TimeoutError:
                 continue
             except OSError as err:
@@ -607,7 +674,12 @@ class KlimatronikClient:
 
     def _manual_pwm_payload(self, fan: int, level: int) -> bytes:
         pwm = level * 200
-        return b"ccmdoSetManualFanPwmcfan" + bytes([fan]) + b"cpwm" + self._encode_tagged_uint(pwm)
+        return (
+            b"ccmdoSetManualFanPwmcfan"
+            + bytes([fan])
+            + b"cpwm"
+            + self._encode_tagged_uint(pwm)
+        )
 
     def _quiet_payload(self, schedule: dict[str, str]) -> bytes:
         payload = bytearray(b"bqt")
@@ -648,7 +720,9 @@ class KlimatronikClient:
     def _encode_tagged_uint(self, value: int) -> bytes:
         checked = int(value)
         if checked < 0:
-            raise KlimatronikProtocolError(f"Negative values are not supported: {checked}")
+            raise KlimatronikProtocolError(
+                f"Negative values are not supported: {checked}"
+            )
         if checked <= 0x17:
             return bytes([checked])
         if checked <= 0xFF:
@@ -681,5 +755,5 @@ class KlimatronikClient:
         return checked
 
     def _validate_hhmm(self, value: str, field: str) -> None:
-        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", str(value)):
+        if not is_valid_hhmm(value):
             raise KlimatronikProtocolError(f"{field} must be in HH:MM format")
