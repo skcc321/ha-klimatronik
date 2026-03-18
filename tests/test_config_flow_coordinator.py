@@ -423,6 +423,7 @@ class CoordinatorBehaviorTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         self.coordinator.data = {"mode": "manual", "available": True}
+        self.coordinator._stream_last_sample_monotonic = time.monotonic() - 100
         self.coordinator._poll_state = AsyncMock(
             side_effect=KlimatronikConnectionError("offline")
         )
