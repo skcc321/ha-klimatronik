@@ -13,7 +13,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
-from .const import DOMAIN
+from .const import DOMAIN, MODES
 from .entity import KlimatronikEntity
 
 
@@ -36,7 +36,7 @@ class KlimatronikFan(KlimatronikEntity, FanEntity):
         | FanEntityFeature.SET_SPEED
         | FanEntityFeature.PRESET_MODE
     )
-    _attr_preset_modes = ["auto", "manual", "turbo", "quiet"]
+    _attr_preset_modes = [mode for mode in MODES if mode != "off"]
 
     def __init__(self, coordinator, entry_id: str) -> None:
         super().__init__(coordinator)
@@ -86,22 +86,17 @@ class KlimatronikFan(KlimatronikEntity, FanEntity):
         if preset_mode:
             await self.async_set_preset_mode(preset_mode)
             return
-        await self.coordinator.async_set_auto(percentage or self.coordinator.default_intensity)
+        await self.coordinator.async_set_auto(
+            percentage or self.coordinator.default_intensity
+        )
 
     async def async_set_percentage(self, percentage: int) -> None:
         await self.coordinator.async_set_auto(percentage)
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
-        if preset_mode == "auto":
-            await self.coordinator.async_set_auto(self.percentage or self.coordinator.default_intensity)
-            return
-        if preset_mode == "manual":
-            await self.coordinator.async_set_manual()
-            return
-        if preset_mode == "turbo":
-            await self.coordinator.async_set_turbo()
-            return
-        if preset_mode == "quiet":
-            await self.coordinator.async_set_quiet()
-            return
-        raise UpdateFailed(f"Unsupported preset_mode: {preset_mode}")
+        if preset_mode not in self._attr_preset_modes:
+            raise UpdateFailed(f"Unsupported preset_mode: {preset_mode}")
+        await self.coordinator.async_set_mode(
+            preset_mode,
+            intensity=self.percentage or self.coordinator.default_intensity,
+        )

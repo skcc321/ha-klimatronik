@@ -8,8 +8,12 @@ import struct
 import sys
 import unittest
 
-_API_PATH = Path(__file__).resolve().parents[1] / "custom_components" / "klimatronik" / "api.py"
-_API_SPEC = importlib.util.spec_from_file_location("klimatronik_api_under_test", _API_PATH)
+_API_PATH = (
+    Path(__file__).resolve().parents[1] / "custom_components" / "klimatronik" / "api.py"
+)
+_API_SPEC = importlib.util.spec_from_file_location(
+    "klimatronik_api_under_test", _API_PATH
+)
 assert _API_SPEC is not None and _API_SPEC.loader is not None
 _API_MODULE = importlib.util.module_from_spec(_API_SPEC)
 sys.modules[_API_SPEC.name] = _API_MODULE
@@ -18,6 +22,7 @@ _API_SPEC.loader.exec_module(_API_MODULE)
 KlimatronikClient = _API_MODULE.KlimatronikClient
 KlimatronikNotifyParser = _API_MODULE.KlimatronikNotifyParser
 KlimatronikProtocolError = _API_MODULE.KlimatronikProtocolError
+is_valid_hhmm = _API_MODULE.is_valid_hhmm
 
 
 class KlimatronikNotifyParserTests(unittest.TestCase):
@@ -49,7 +54,9 @@ class KlimatronikNotifyParserTests(unittest.TestCase):
         self.assertEqual(decoded["temp_outflow_outlet_c"], 22.0)
 
     def test_parse_tagged_none_uses_zero_for_known_fan_keys(self) -> None:
-        value, next_idx = self.parser._parse_tagged("ff1.pwm", b"", self.parser.TAG_NONE, 7)
+        value, next_idx = self.parser._parse_tagged(
+            "ff1.pwm", b"", self.parser.TAG_NONE, 7
+        )
 
         self.assertEqual(value, 0)
         self.assertEqual(next_idx, 7)
@@ -76,7 +83,15 @@ class KlimatronikNotifyParserTests(unittest.TestCase):
         weekend = (23 * 60 + 30, 7 * 60 + 15)
         payload = bytearray(b"prefixbqt")
         payload.append(0x8E)
-        for start, end in [weekday, weekday, weekday, weekday, weekday, weekend, weekend]:
+        for start, end in [
+            weekday,
+            weekday,
+            weekday,
+            weekday,
+            weekday,
+            weekend,
+            weekend,
+        ]:
             payload.extend(tagged_u16(start))
             payload.extend(tagged_u16(end))
 
@@ -136,6 +151,14 @@ class KlimatronikClientHelperTests(unittest.TestCase):
         self.assertEqual(schedule["fri_end"], "06:00")
         self.assertEqual(schedule["sat_start"], "23:30")
         self.assertEqual(schedule["sun_end"], "07:15")
+
+    def test_is_valid_hhmm_accepts_trimmed_values(self) -> None:
+        self.assertTrue(is_valid_hhmm(" 22:00 "))
+        self.assertFalse(is_valid_hhmm("24:00"))
+
+    def test_validate_hhmm_rejects_invalid_values(self) -> None:
+        with self.assertRaises(KlimatronikProtocolError):
+            self.client._validate_hhmm("06:60", "weekday_start")
 
 
 if __name__ == "__main__":

@@ -7,11 +7,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import DOMAIN, MODES
 from .entity import KlimatronikEntity
-
-
-MODES = ["off", "auto", "manual", "turbo", "quiet"]
 
 
 async def async_setup_entry(
@@ -27,7 +24,7 @@ async def async_setup_entry(
 class KlimatronikModeSelect(KlimatronikEntity, SelectEntity):
     """Mode selector."""
 
-    _attr_options = MODES
+    _attr_options = list(MODES)
 
     def __init__(self, coordinator, entry_id: str) -> None:
         super().__init__(coordinator)

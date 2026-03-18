@@ -12,7 +12,12 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONCENTRATION_PARTS_PER_BILLION, CONCENTRATION_PARTS_PER_MILLION, PERCENTAGE, UnitOfTemperature
+from homeassistant.const import (
+    CONCENTRATION_PARTS_PER_BILLION,
+    CONCENTRATION_PARTS_PER_MILLION,
+    PERCENTAGE,
+    UnitOfTemperature,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -31,13 +36,38 @@ DEFAULT_TEMP_PROBE_MAP = {
 }
 
 
+def _decoded(data: dict[str, Any]) -> dict[str, Any]:
+    return data.get("decoded", {})
+
+
+def _decoded_value(data: dict[str, Any], key: str) -> Any:
+    return _decoded(data).get(key)
+
+
+def _first_value(data: dict[str, Any], *keys: str, default: Any = None) -> Any:
+    decoded = _decoded(data)
+    for key in keys:
+        value = decoded.get(key)
+        if value is not None:
+            return value
+    return default
+
+
 def _temp_for_probe(decoded: dict[str, Any], probe: str) -> Any:
     if probe == "inside":
         return decoded.get("temp_inside_c")
     if probe == "jt2":
-        return decoded.get("temp_jt2_c") if decoded.get("temp_jt2_c") is not None else decoded.get("temp_outside_c")
+        return (
+            decoded.get("temp_jt2_c")
+            if decoded.get("temp_jt2_c") is not None
+            else decoded.get("temp_outside_c")
+        )
     if probe == "jt3":
-        return decoded.get("temp_jt3_c") if decoded.get("temp_jt3_c") is not None else _temp_for_probe(decoded, "jt2")
+        return (
+            decoded.get("temp_jt3_c")
+            if decoded.get("temp_jt3_c") is not None
+            else _temp_for_probe(decoded, "jt2")
+        )
     if probe == "jt4":
         return decoded.get("temp_jt4_c")
     if probe == "jt5":
@@ -46,12 +76,23 @@ def _temp_for_probe(decoded: dict[str, Any], probe: str) -> Any:
 
 
 def _mapped_temp(data: dict[str, Any], slot: str) -> Any:
-    decoded = data.get("decoded", {})
+    decoded = _decoded(data)
     semantic_key = f"temp_{slot}_c"
     if decoded.get(semantic_key) is not None:
         return decoded.get(semantic_key)
     probe = DEFAULT_TEMP_PROBE_MAP[slot]
     return _temp_for_probe(decoded, probe)
+
+
+def _light_value(data: dict[str, Any]) -> Any:
+    return _first_value(data, "light", "il1.ltr329", default=0)
+
+
+def _turbo_duration_value(data: dict[str, Any]) -> Any:
+    value = _first_value(data, "turbo_duration_s", "hduration")
+    if value is not None:
+        return value
+    return data.get("turbo_duration")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -75,7 +116,7 @@ SENSORS: tuple[KlimatronikSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfTemperature.CELSIUS,
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: data.get("decoded", {}).get("temp_inside_c"),
+        value_fn=lambda data: _decoded_value(data, "temp_inside_c"),
     ),
     KlimatronikSensorDescription(
         key="temp_outside_c",
@@ -91,7 +132,7 @@ SENSORS: tuple[KlimatronikSensorDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
         device_class=SensorDeviceClass.HUMIDITY,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: data.get("decoded", {}).get("humidity_inside_pct"),
+        value_fn=lambda data: _decoded_value(data, "humidity_inside_pct"),
     ),
     KlimatronikSensorDescription(
         key="co2",
@@ -99,7 +140,7 @@ SENSORS: tuple[KlimatronikSensorDescription, ...] = (
         native_unit_of_measurement=CONCENTRATION_PARTS_PER_MILLION,
         device_class=SensorDeviceClass.CO2,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: data.get("decoded", {}).get("mq1.sgp30.eCO2"),
+        value_fn=lambda data: _decoded_value(data, "mq1.sgp30.eCO2"),
     ),
     KlimatronikSensorDescription(
         key="tvoc",
@@ -107,7 +148,7 @@ SENSORS: tuple[KlimatronikSensorDescription, ...] = (
         icon="mdi:molecule",
         native_unit_of_measurement=CONCENTRATION_PARTS_PER_BILLION,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: data.get("decoded", {}).get("mq1.sgp30.TVOC"),
+        value_fn=lambda data: _decoded_value(data, "mq1.sgp30.TVOC"),
     ),
     KlimatronikSensorDescription(
         key="fan_inflow_rpm",
@@ -116,7 +157,7 @@ SENSORS: tuple[KlimatronikSensorDescription, ...] = (
         native_unit_of_measurement="rpm",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda data: data.get("decoded", {}).get("ff1.rpm"),
+        value_fn=lambda data: _decoded_value(data, "ff1.rpm"),
     ),
     KlimatronikSensorDescription(
         key="fan_outflow_rpm",
@@ -125,7 +166,7 @@ SENSORS: tuple[KlimatronikSensorDescription, ...] = (
         native_unit_of_measurement="rpm",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda data: data.get("decoded", {}).get("ff2.rpm"),
+        value_fn=lambda data: _decoded_value(data, "ff2.rpm"),
     ),
     KlimatronikSensorDescription(
         key="temp_inflow_inlet_c",
@@ -169,7 +210,7 @@ SENSORS: tuple[KlimatronikSensorDescription, ...] = (
         icon="mdi:percent-circle-outline",
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: data.get("decoded", {}).get("fcoeffi"),
+        value_fn=lambda data: _decoded_value(data, "fcoeffi"),
     ),
     KlimatronikSensorDescription(
         key="fan_inflow_pwm",
@@ -178,7 +219,7 @@ SENSORS: tuple[KlimatronikSensorDescription, ...] = (
         native_unit_of_measurement="pwm",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda data: data.get("decoded", {}).get("ff1.pwm"),
+        value_fn=lambda data: _decoded_value(data, "ff1.pwm"),
     ),
     KlimatronikSensorDescription(
         key="fan_outflow_pwm",
@@ -187,7 +228,7 @@ SENSORS: tuple[KlimatronikSensorDescription, ...] = (
         native_unit_of_measurement="pwm",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda data: data.get("decoded", {}).get("ff2.pwm"),
+        value_fn=lambda data: _decoded_value(data, "ff2.pwm"),
     ),
     KlimatronikSensorDescription(
         key="light",
@@ -195,13 +236,7 @@ SENSORS: tuple[KlimatronikSensorDescription, ...] = (
         icon="mdi:brightness-6",
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda data: data.get("decoded", {}).get("light")
-        if data.get("decoded", {}).get("light") is not None
-        else (
-            data.get("decoded", {}).get("il1.ltr329")
-            if data.get("decoded", {}).get("il1.ltr329") is not None
-            else 0
-        ),
+        value_fn=_light_value,
     ),
     KlimatronikSensorDescription(
         key="turbo_duration_s",
@@ -209,37 +244,31 @@ SENSORS: tuple[KlimatronikSensorDescription, ...] = (
         icon="mdi:timer-outline",
         native_unit_of_measurement="s",
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda data: data.get("decoded", {}).get("turbo_duration_s")
-        if data.get("decoded", {}).get("turbo_duration_s") is not None
-        else (
-            data.get("decoded", {}).get("hduration")
-            if data.get("decoded", {}).get("hduration") is not None
-            else data.get("turbo_duration")
-        ),
+        value_fn=_turbo_duration_value,
     ),
     KlimatronikSensorDescription(
         key="heater_state",
         name="Heater State",
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda data: data.get("decoded", {}).get("heater_state"),
+        value_fn=lambda data: _decoded_value(data, "heater_state"),
     ),
     KlimatronikSensorDescription(
         key="defroster_state",
         name="Defroster State",
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda data: data.get("decoded", {}).get("defroster_state"),
+        value_fn=lambda data: _decoded_value(data, "defroster_state"),
     ),
     KlimatronikSensorDescription(
         key="alarm_state",
         name="Alarm State",
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda data: data.get("decoded", {}).get("alarm_state"),
+        value_fn=lambda data: _decoded_value(data, "alarm_state"),
     ),
     KlimatronikSensorDescription(
         key="servo_state",
         name="Servo State",
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda data: data.get("decoded", {}).get("servo_state"),
+        value_fn=lambda data: _decoded_value(data, "servo_state"),
     ),
 )
 
@@ -288,7 +317,9 @@ class KlimatronikSensor(KlimatronikEntity, SensorEntity):
         if key == "defroster_state":
             return "mdi:snowflake-melt" if value == "on" else "mdi:snowflake-off"
         if key == "servo_state":
-            return "mdi:swap-horizontal-bold" if value == "on" else "mdi:swap-horizontal"
+            return (
+                "mdi:swap-horizontal-bold" if value == "on" else "mdi:swap-horizontal"
+            )
         return self.entity_description.icon
 
     @property
